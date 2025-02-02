@@ -32,74 +32,79 @@ async function extractKeywordsWithLlama(resumeText) {
   const { default: LlamaAI } = await import("llamaai");
   const llamaAPI = new LlamaAI(LLAMA_API_KEY);
 
-  // Helper to chunk big text, so each request is smaller.
-  function chunkText(text, chunkSize = 3000) {
-    const chunks = [];
-    for (let i = 0; i < text.length; i += chunkSize) {
-      chunks.push(text.slice(i, i + chunkSize));
+  const modelName = "mixtral-8x22b-instruct"; // Using a lightweight model for faster response
+
+  const apiRequestJson = {
+    messages: [
+      { role: "system", content: "You are a helpful assistant that extracts job-related keywords from resume text." },
+      { role: "user", content: `Extract relevant job-related keywords from the following resume text:\n\n${resumeText}` }
+    ],
+    stream: false,
+    model: modelName
+  };
+
+  try {
+    const response = await llamaAPI.run(apiRequestJson);
+
+    // Debug: Log the full API response for troubleshooting
+    console.log("Llama API Response:", response);
+
+    // Validate the API response
+    if (!response || !response.choices || response.choices.length === 0) {
+      throw new Error("No 'choices' returned from Llama API.");
     }
-    return chunks;
-  }
 
-  // Break the resume into chunks
-  const textChunks = chunkText(resumeText, 3000);
-  let allKeywords = [];
-
-  // Use a smaller/faster model to reduce timeouts
-  const modelName = "orca-mini-3b";
-
-  for (const [index, chunk] of textChunks.entries()) {
-    const apiRequestJson = {
-      messages: [
-        {
-          role: "system",
-          content: "You are a helpful assistant that extracts job-related keywords from text."
-        },
-        {
-          role: "user",
-          content: `Extract keywords from:\n\n${chunk}`
-        }
-      ],
-      stream: false,
-      model: modelName
-    };
-
-    try {
-      const response = await llamaAPI.run(apiRequestJson);
-
-      // Safely check if choices exist
-      if (!response.choices || !response.choices[0]) {
-        throw new Error("No 'choices' returned from Llama API.");
-      }
-
-      const content = response.choices[0].message.content;
-      if (!content) {
-        throw new Error("Llama response has no 'content'.");
-      }
-
-      // Split keywords by comma (adjust as needed based on your actual Llama output)
-      const chunkKeywords = content
-        .split(",")
-        .map((k) => k.trim())
-        .filter(Boolean);
-
-      allKeywords = [...allKeywords, ...chunkKeywords];
-    } catch (error) {
-      console.error(`Error extracting keywords from chunk #${index}:`, error);
-      // Optionally provide a fallback:
-      // allKeywords = [...allKeywords, "Software Developer"];
-      // or just continue to the next chunk.
+    const content = response.choices[0].message.content;
+    if (!content || content.trim() === "") {
+      throw new Error("Llama API returned empty 'content'.");
     }
-  }
 
-  // Filter duplicates
-  const uniqueKeywords = [...new Set(allKeywords)];
-  // Fallback if everything failed
-  if (uniqueKeywords.length === 0) {
+    // Extract keywords (assuming they are comma-separated)
+    const keywords = content
+      .split(",")
+      .map((k) => k.trim())
+      .filter(Boolean); // Remove empty strings
+
+    // Remove duplicate keywords
+    const uniqueKeywords = [...new Set(keywords)];
+
+    // Fallback if no keywords were extracted
+    if (uniqueKeywords.length === 0) {
+      console.warn("No keywords extracted. Using fallback keyword: 'Software Developer'");
+      return ["Software Developer"];
+    }
+
+    return uniqueKeywords;
+  } catch (error) {
+    console.error("Error extracting keywords:", error.message);
+
+    // Fallback if an error occurs
     return ["Software Developer"];
   }
+}
 
-  return uniqueKeywords;
+
+async function generateRoadmapWithLlama(resumeText, jobRole) {
+  const { default: LlamaAI } = await import('llamaai');
+  const llamaAPI = new LlamaAI(LLAMA_API_KEY);
+
+  const apiRequestJson = {
+    messages: [
+      { role: "system", content: "You are a career coach specializing in analyzing resumes and providing personalized roadmaps to help individuals succeed in their target job roles." },
+      { role: "user", content: `Based on this resume:\n\n${resumeText}\n\nAnd the job role: "${jobRole}", provide a brief 7-step roadmap to help the candidate improve. Focus on skills, projects/outreach, networking, and interview tips. Keep it concise with only 4 points in about 150 words.` }
+    ],
+    stream: false,
+    model: "mixtral-8x22b-instruct"
+  };
+
+  try {
+    const response = await llamaAPI.run(apiRequestJson);
+    if (!response.choices || response.choices.length === 0) throw new Error("No choices returned in response.");
+    return response.choices[0].message.content.trim();
+  } catch (error) {
+    console.error("Error generating roadmap:", error);
+    return "Unable to generate a roadmap at this time.";
+  }
 }
 
 
@@ -143,38 +148,6 @@ async function findJobs(keywords) {
   }
 }
 
-async function generateRoadmap(userSkills, jobDescriptions) {
-  const { default: LlamaAI } = await import("llamaai");
-  const llamaAPI = new LlamaAI(LLAMA_API_KEY);
-
-  const jobSkills = jobDescriptions.join("\n\n");
-
-  // Use a smaller/faster model again
-  const modelName = "orca-mini-3b";
-
-  const apiRequestJson = {
-    messages: [
-      {
-        role: "system",
-        content: "Analyze the skill gaps and generate a 7-day roadmap with recommended resources. Make it easy to follow."
-      },
-      {
-        role: "user",
-        content: `User Skills: ${userSkills.join(", ")}\n\nJob Skills: ${jobSkills}`
-      }
-    ],
-    stream: false,
-    model: modelName
-  };
-
-  try {
-    const response = await llamaAPI.run(apiRequestJson);
-    return response.choices[0].message.content.trim();
-  } catch (error) {
-    console.error("Error generating roadmap:", error);
-    return "Unable to generate roadmap. Please try again.";
-  }
-}
 
 app.post("/upload-resume", async (req, res) => {
   try {
@@ -194,7 +167,8 @@ app.post("/upload-resume", async (req, res) => {
 
     // 3) Generate roadmap from user skills + job descriptions
     const jobDescriptions = jobs.map(job => job.description);
-    const roadmap = await generateRoadmap(userSkills, jobDescriptions);
+    const roadmap = await generateRoadmapWithLlama(resumeText,userSkills[0]);
+    console.log(roadmap);
 
     // 4) Provide a dummy or computed ATS score
     const ats_score = 80; // or any random logic
