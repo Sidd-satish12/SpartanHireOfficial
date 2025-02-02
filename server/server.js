@@ -4,11 +4,11 @@ const cors = require("cors");
 const pdfParse = require("pdf-parse");
 //const fetch = require("node-fetch");
 
-require('dotenv').config();
+require('dotenv').config({ path: '../.env' });
 
 const ADZUNA_API_ID = process.env.ADZUNA_API_ID;
 const ADZUNA_API_KEY = process.env.ADZUNA_API_KEY;
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+const LLAMA_API_KEY = process.env.LLAMA_API_KEY;
 
 const COUNTRY = "us";
 const BASE_URL = `https://api.adzuna.com/v1/api/jobs/${COUNTRY}/search/1`;
@@ -20,38 +20,44 @@ app.use(cors());
 app.use(fileUpload());
 
 // Analyze Resume using OpenAI
-async function analyzeResumeWithOpenAI(resumeText) {
-  const requestBody = {
-    model: "gpt-4",
+async function extractKeywordsWithLlama(resumeText) {
+  const { default: LlamaAI } = await import('llamaai');
+  const llamaAPI = new LlamaAI(LLAMA_API_KEY);
+  // Build the API request JSON according to LlamaAPI's documentation.
+  const apiRequestJson = {
+
     messages: [
       {
         role: "system",
-        content: "You are an ATS that evaluates resumes, provides an ATS score (0-100), improvement suggestions, and job-related keywords."
+        content: "You are a helpful assistant that extracts job-related keywords from resumes."
       },
       {
         role: "user",
-        content: `Analyze the following resume:\n\n${resumeText}\n\nReturn JSON with ats_score (0-100), suggestions (array), and keywords (array).`
+        content: `Extract job-related keywords from the following resume. Consider the whole resume and only return relevent keywords in a single industry. Only return a comma-separated list of job roles, technologies, and skills:\n\n${resumeText}`
       }
     ],
-    temperature: 0.2
+    stream: false,
+    model: "mixtral-8x22b-instruct"
   };
 
   try {
-    const response = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${OPENAI_API_KEY}`
-      },
-      body: JSON.stringify(requestBody)
-    });
+    // Execute the API request using the LlamaAPI library's run method.
+    const response = await llamaAPI.run(apiRequestJson);
+    console.log("Full response from LlamaAPI:", response);
 
-    const data = await response.json();
-    const content = data.choices[0].message.content.trim();
-    return JSON.parse(content);
+    // Process the response.
+    // We assume the response structure is similar to:
+    // { choices: [ { message: { content: "keyword1, keyword2, ..." } } ] }
+    if (!response.choices || response.choices.length === 0) {
+      throw new Error("No choices returned in response.");
+    }
+    const content = response.choices[0].message.content.trim();
+    const keywords = content.split(",").map(keyword => keyword.trim());
+    console.log("Extracted Keywords:", keywords);
+    return keywords;
   } catch (error) {
-    console.error("OpenAI Error:", error);
-    return { ats_score: 50, suggestions: ["Improve formatting."], keywords: ["Software Developer"] };
+    console.error("Error extracting keywords:", error);
+    return ["Software Developer"]; // Fallback keyword
   }
 }
 
@@ -63,7 +69,7 @@ async function findJobs(keywords) {
   try {
     const response = await fetch(url);
     const data = await response.json();
-    return data.results || [];
+    return (data.results || []).slice(0, 5);
   } catch (error) {
     console.error("Adzuna Error:", error);
     return [];
@@ -83,10 +89,10 @@ app.post("/upload-resume", async (req, res) => {
     const pdfData = await pdfParse(buffer);
     const resumeText = pdfData.text;
 
-    const { ats_score, suggestions, keywords } = await analyzeResumeWithOpenAI(resumeText);
+    const keywords = await extractKeywordsWithLlama(resumeText);
     const jobs = await findJobs(keywords);
 
-    res.json({ ats_score, suggestions, jobs });
+    res.json({ jobs });
   } catch (error) {
     console.error("Server Error:", error);
     res.status(500).json({ error: "Internal Server Error" });
