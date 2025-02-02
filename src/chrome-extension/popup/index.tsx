@@ -1,12 +1,19 @@
+// popup/index.tsx
 import React, { useState } from "react";
 import "../global.css";
 
 export const Popup = () => {
-  const [atsScore, setAtsScore] = useState<number | null>(null);
-  const [jobs, setJobs] = useState<{ title: string; company: { display_name: string } }[]>([]);
-  const [bookmarkedJobs, setBookmarkedJobs] = useState<number[]>([]);
+  const [jobs, setJobs] = useState<{
+    id: string;
+    title: string;
+    companyName: string;
+    jobUrl: string;
+    location: string;
+    salary: string;
+    postedTime: string;
+  }[]>([]);
+  const [bookmarkedJobs, setBookmarkedJobs] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
-  const [recruiters, setRecruiters] = useState<{ name: string; profileLink: string }[]>([]);
 
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -24,109 +31,80 @@ export const Popup = () => {
         method: "POST",
         body: formData,
       });
-
       const data = await response.json();
-      setAtsScore(data.ats_score);
-      setJobs(data.jobs);
+
+      console.log("Response data:", data);
+      setJobs(data || []);
     } catch (error) {
-      console.error("Error:", error);
+      console.error("Error uploading resume:", error);
       alert("Failed to process resume.");
     } finally {
       setLoading(false);
     }
   };
 
-  const handleBookmark = (index: number) => {
+  const handleBookmark = (jobId: string) => {
     setBookmarkedJobs((prev) =>
-      prev.includes(index) ? prev.filter((i) => i !== index) : [...prev, index]
+      prev.includes(jobId) ? prev.filter((id) => id !== jobId) : [...prev, jobId]
     );
   };
 
-  const findRecruiters = async () => {
-    try {
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      chrome.tabs.sendMessage(tab.id!, { action: "findRecruiters" }, (response) => {
-        if (response && response.recruiters) {
-          setRecruiters(response.recruiters);
-        } else {
-          alert("Couldn't find recruiters. Please open LinkedIn.");
-        }
-      });
-    } catch (error) {
-      console.error("Error finding recruiters:", error);
-    }
-  };
-
   return (
-    <div className="p-4 text-center bg-green-600 text-white rounded-lg shadow-md">
-      {!atsScore && (
-        <>
-          <h1 className="text-3xl font-bold mb-4">Welcome Spartan!</h1>
-          <h2 className="text-xl font-semibold mb-4">
-            Please upload your resume to open a new world of opportunities
-          </h2>
-          <input
-            type="file"
-            accept="application/pdf"
-            onChange={handleFileUpload}
-            className="mb-4 p-2 border-2 border-white rounded focus:outline-none focus:ring-2 focus:ring-white bg-green-800 text-white"
-          />
-        </>
-      )}
+    <div className="p-4 text-center bg-gradient-to-r from-green-900 via-green-700 to-green-500 text-white rounded-xl shadow-lg animate-fade-in">
+      <h1 className="text-4xl font-extrabold mb-4 animate-bounce">🏹 Welcome, Spartan! 🏹</h1>
+      <h2 className="text-xl font-semibold mb-4">🏛️ Conquer Your Job Hunt with MSU Spirit! 🏛️</h2>
 
-      {loading && <p className="text-lg">Processing...</p>}
+      <input
+        type="file"
+        accept="application/pdf"
+        onChange={handleFileUpload}
+        className="mb-4 p-3 border-4 border-white rounded-xl focus:outline-none focus:ring-4 focus:ring-green-300 bg-green-800 text-white cursor-pointer hover:bg-green-700 transition-transform transform hover:scale-105"
+      />
 
-      {atsScore !== null && (
-        <div className="bg-green-700 p-4 rounded-lg shadow-md">
-          <h2 className="text-2xl font-semibold mb-2">ATS Score: {atsScore}%</h2>
+      {loading && <p className="text-lg animate-pulse">⏳ Analyzing your resume... ⏳</p>}
 
-          <h3 className="font-bold mt-4 mb-2">Select Job Opportunities:</h3>
-          <ul className="list-disc list-inside">
-            {jobs.map((job, index) => (
-              <li key={index} className="flex justify-between items-center mb-2">
-                <span>
-                  <strong>{job.title}</strong> at {job.company.display_name}
-                </span>
+      {jobs.length > 0 && (
+        <div className="bg-gradient-to-br from-green-800 via-green-600 to-green-500 p-4 rounded-xl shadow-xl">
+          <h3 className="font-bold mt-4 mb-2 text-white">🎯 Job Opportunities Just for You! 🎯</h3>
+          <ul className="list-none space-y-3">
+            {jobs.map((job) => (
+              <li
+                key={job.id}
+                className="flex justify-between items-center p-3 bg-white bg-opacity-20 rounded-lg shadow-md hover:shadow-xl transition-transform transform hover:scale-105"
+              >
+                <div className="text-left">
+                  <strong>{job.title}</strong> at {job.companyName}
+                  <br />
+                  <span className="text-sm">📍 {job.location}</span>
+                  <br />
+                  <span className="text-sm">💰 {job.salary}</span>
+                  <br />
+                  <span className="text-sm">⏱ {job.postedTime}</span>
+                  <br />
+                  <a
+                    href={job.jobUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-yellow-300 underline hover:text-yellow-200"
+                  >
+                    🏹 Apply Here 🏹
+                  </a>
+                </div>
                 <button
-                  onClick={() => handleBookmark(index)}
-                  className={`ml-2 p-1 rounded-full border-2 ${
-                    bookmarkedJobs.includes(index)
-                      ? "bg-white text-green-800 border-white"
-                      : "bg-green-800 text-white border-white"
-                  }`}
+                  onClick={() => handleBookmark(job.id)}
+                  className={`ml-4 p-2 w-10 h-10 rounded-sm border-4 transition-transform transform hover:scale-110
+                    ${
+                      bookmarkedJobs.includes(job.id)
+                        ? "bg-yellow-300 text-black border-yellow-500 animate-bounce"
+                        : "bg-green-300 text-black border-green-500 hover:bg-green-200"
+                    }
+                  `}
                 >
-                  {bookmarkedJobs.includes(index) ? "✓" : "+"}
+                  {bookmarkedJobs.includes(job.id) ? "⭐" : "➕"}
                 </button>
               </li>
             ))}
           </ul>
-
-          <button
-            onClick={findRecruiters}
-            className="mt-4 p-2 bg-white text-green-800 rounded hover:bg-green-300 focus:outline-none focus:ring-2 focus:ring-white"
-          >
-            Find Recruiters
-          </button>
-
-          {recruiters.length > 0 && (
-            <div className="mt-4 text-left">
-              <h3 className="font-bold mb-2">Potential Recruiters:</h3>
-              <ul className="list-disc list-inside">
-                {recruiters.map((recruiter, index) => (
-                  <li key={index}>
-                    <a
-                      href={recruiter.profileLink}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-white underline hover:text-green-300"
-                    >
-                      {recruiter.name}
-                    </a>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
         </div>
       )}
     </div>

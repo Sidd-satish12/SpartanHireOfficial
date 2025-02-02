@@ -13,6 +13,7 @@
     "@types/node": "^22.5.5",
     "axios": "^1.7.9",
     "dotenv": "^16.4.7",
+    "google-auth-library": "^9.15.1",
     "llamaai": "^1.0.4",
     "pdf-parser": "^1.0.5",
     "react": "^18.3.1",
