@@ -8,8 +8,8 @@ const pdfParse = require("pdf-parse");
 // require('dotenv').config();
 
 const ADZUNA_API_ID = "145c6b68";
-const ADZUNA_API_KEY = "9837360432df6e841ee819641d5ee8a2";
-const LLAMA_API_KEY = "LA-e2ae570be5664ecc8cc80388a1f03ecb584f991f29fc4e168cba26c27a43b5ef";
+const ADZUNA_API_KEY = process.env.ADZUNA_API_KEY;
+const LLAMA_API_KEY = process.env.LLAMA_API_KEY;;
 
 const COUNTRY = "us";
 const BASE_URL = `https://api.adzuna.com/v1/api/jobs/${COUNTRY}/search/1`;
