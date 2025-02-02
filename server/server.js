@@ -10,6 +10,7 @@ const ADZUNA_API_ID = process.env.ADZUNA_API_ID;
 const ADZUNA_API_KEY = process.env.ADZUNA_API_KEY;
 const LLAMA_API_KEY = process.env.LLAMA_API_KEY;
 
+
 const COUNTRY = "us";
 const BASE_URL = `https://api.adzuna.com/v1/api/jobs/${COUNTRY}/search/1`;
 
@@ -64,10 +65,12 @@ async function extractKeywordsWithLlama(resumeText) {
 // Fetch Jobs from Adzuna
 async function findJobs(keywords) {
   const query = keywords.join("%20");
-  const url = `${BASE_URL}?app_id=${ADZUNA_API_ID}&app_key=${ADZUNA_API_KEY}&what_or=${query}`;
+  const url = `${BASE_URL}?app_id=${ADZUNA_API_ID}&app_key=${ADZUNA_API_KEY}&what_or=${encodeURIComponent(query)}`;
 
   try {
     const response = await fetch(url);
+    //const text = await response.text();  // Get raw response
+    //console.log("Raw Adzuna Response:", text);
     const data = await response.json();
     return (data.results || []).slice(0, 5);
   } catch (error) {
