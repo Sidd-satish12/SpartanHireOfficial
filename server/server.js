@@ -1,14 +1,18 @@
+// server.js
 const express = require("express");
 const fileUpload = require("express-fileupload");
 const cors = require("cors");
 const pdfParse = require("pdf-parse");
-const axios = require("axios");
-const { title } = require("process");
 
-require('dotenv').config({ path: '../.env' });
+// If you have environment variables, uncomment:
+// require('dotenv').config();
 
+const ADZUNA_API_ID = "145c6b68";
+const ADZUNA_API_KEY = "9837360432df6e841ee819641d5ee8a2";
 const LLAMA_API_KEY = "LA-e2ae570be5664ecc8cc80388a1f03ecb584f991f29fc4e168cba26c27a43b5ef";
-const APIFY_API_TOKEN = "apify_api_ZtR8bpcAgfe1629hDWsJLnfgBoYYYi05T3gR";
+
+const COUNTRY = "us";
+const BASE_URL = `https://api.adzuna.com/v1/api/jobs/${COUNTRY}/search/1`;
 
 const app = express();
 const PORT = 3000;
@@ -16,98 +20,195 @@ const PORT = 3000;
 app.use(cors());
 app.use(fileUpload());
 
-// Analyze Resume using LlamaAI
-async function extractKeywordsWithLlama(resumeText) {
-  const { default: LlamaAI } = await import('llamaai');
-  const llamaAPI = new LlamaAI(LLAMA_API_KEY);
-  const apiRequestJson = {
-    messages: [
-      { role: "system", content: "You are an expert career advisor specializing in analyzing resumes to identify the most relevant job-related keywords. Focus on extracting keywords that are highly relevant to the primary industry, field, or domain reflected in the resume, avoiding unrelated or generic job titles." },
-      { role: "user", content: `Extract job-related keywords from the following resume. Return exactly five specific job roles that are directly relevant to the candidate's primary field of expertise, formatted as a concise, comma-separated list with no additional explanation or text :\n\n${resumeText}` }
-    ],
-    stream: false,
-    model: "mixtral-8x22b-instruct"
-  };
-
-  try {
-    const response = await llamaAPI.run(apiRequestJson);
-    if (!response.choices || response.choices.length === 0) throw new Error("No choices returned in response.");
-    const content = response.choices[0].message.content.trim();
-    return content.split(",").map(keyword => keyword.trim());
-  } catch (error) {
-    console.error("Error extracting keywords:", error);
-    return ["Software Developer"];
-  }
+function chunkText(text, chunkSize = 3000) {
+  const chunks = [];
+  for (let i = 0; i < text.length; i += chunkSize) {
+    chunks.push(text.slice(i, i + chunkSize));
+  }
+  return chunks;
 }
+
+async function extractKeywordsWithLlama(resumeText) {
+  const { default: LlamaAI } = await import("llamaai");
+  const llamaAPI = new LlamaAI(LLAMA_API_KEY);
+
+  // Helper to chunk big text, so each request is smaller.
+  function chunkText(text, chunkSize = 3000) {
+    const chunks = [];
+    for (let i = 0; i < text.length; i += chunkSize) {
+      chunks.push(text.slice(i, i + chunkSize));
+    }
+    return chunks;
+  }
+
+  // Break the resume into chunks
+  const textChunks = chunkText(resumeText, 3000);
+  let allKeywords = [];
+
+  // Use a smaller/faster model to reduce timeouts
+  const modelName = "orca-mini-3b";
+
+  for (const [index, chunk] of textChunks.entries()) {
+    const apiRequestJson = {
+      messages: [
+        {
+          role: "system",
+          content: "You are a helpful assistant that extracts job-related keywords from text."
+        },
+        {
+          role: "user",
+          content: `Extract keywords from:\n\n${chunk}`
+        }
+      ],
+      stream: false,
+      model: modelName
+    };
+
+    try {
+      const response = await llamaAPI.run(apiRequestJson);
+
+      // Safely check if choices exist
+      if (!response.choices || !response.choices[0]) {
+        throw new Error("No 'choices' returned from Llama API.");
+      }
+
+      const content = response.choices[0].message.content;
+      if (!content) {
+        throw new Error("Llama response has no 'content'.");
+      }
+
+      // Split keywords by comma (adjust as needed based on your actual Llama output)
+      const chunkKeywords = content
+        .split(",")
+        .map((k) => k.trim())
+        .filter(Boolean);
+
+      allKeywords = [...allKeywords, ...chunkKeywords];
+    } catch (error) {
+      console.error(`Error extracting keywords from chunk #${index}:`, error);
+      // Optionally provide a fallback:
+      // allKeywords = [...allKeywords, "Software Developer"];
+      // or just continue to the next chunk.
+    }
+  }
+
+  // Filter duplicates
+  const uniqueKeywords = [...new Set(allKeywords)];
+  // Fallback if everything failed
+  if (uniqueKeywords.length === 0) {
+    return ["Software Developer"];
+  }
+
+  return uniqueKeywords;
+}
+
 
 async function findJobs(keywords) {
-  const query = keywords.join(" ");
-  const triggerUrl = `https://api.apify.com/v2/acts/bebity~linkedin-jobs-scraper/runs?token=${APIFY_API_TOKEN}`;
+  // Join keywords by space or use OR
+  const query = keywords.join("%20");
 
-  const requestBody = {
-    title: "Software Engineer",
-    rows: 5,
-    location: "United States"
-  };
+  // Add where=some location
+  const url = `${BASE_URL}?app_id=${ADZUNA_API_ID}&app_key=${ADZUNA_API_KEY}&what_or=${encodeURIComponent(query)}&where=San%20Francisco`;
 
-  try {
-    // Step 1: Trigger the APIFY LinkedIn Job Scraper
-    const triggerResponse = await axios.post(triggerUrl, requestBody, {
-      headers: { 'Content-Type': 'application/json' }
-    });
+  try {
+    const response = await fetch(url, {
+      headers: {
+        "Accept": "application/json"
+      }
+    });
 
-    const runId = triggerResponse.data.data.id;
-    const datasetId = triggerResponse.data.data.defaultDatasetId;
+    // If not OK, likely an HTML error
+    if (!response.ok) {
+      console.error("Adzuna HTTP Error:", response.status, response.statusText);
+      return [];
+    }
 
-    console.log(`Scraper started with Run ID: ${runId}`);
+    const data = await response.json();
+    if (!data.results) {
+      return [];
+    }
 
-    // Step 2: Poll for Completion
-    let status = 'READY';
-    while (status !== 'SUCCEEDED' && status !== 'FAILED') {
-      const statusResponse = await axios.get(`https://api.apify.com/v2/actor-runs/${runId}?token=${APIFY_API_TOKEN}`);
-      status = statusResponse.data.data.status;
-      console.log(`Current status: ${status}`);
-      if (status === 'SUCCEEDED') break;
-      await new Promise(resolve => setTimeout(resolve, 5000)); // Poll every 5 seconds
-    }
-
-    if (status === 'SUCCEEDED') {
-      // Step 3: Fetch Job Postings
-      const datasetUrl = `https://api.apify.com/v2/datasets/${datasetId}/items?token=${APIFY_API_TOKEN}`;
-      const jobsResponse = await axios.get(datasetUrl);
-      return jobsResponse.data.slice(0, 5); // Return top 5 jobs
-    } else {
-      console.log('The scraping job failed.');
-      return [];
-    }
-  } catch (error) {
-    console.error("APIFY API Error:", error.response ? error.response.data : error.message);
-    return [];
-  }
+    // Return top 5
+    return data.results.slice(0, 5).map(job => ({
+      title: job.title || "",
+      company: {
+        display_name: job.company?.display_name || "N/A"
+      },
+      redirect_url: job.redirect_url || "",
+      description: job.description || ""
+    }));
+  } catch (error) {
+    console.error("Adzuna Error:", error);
+    return [];
+  }
 }
 
+async function generateRoadmap(userSkills, jobDescriptions) {
+  const { default: LlamaAI } = await import("llamaai");
+  const llamaAPI = new LlamaAI(LLAMA_API_KEY);
 
-// Upload Resume Endpoint
+  const jobSkills = jobDescriptions.join("\n\n");
+
+  // Use a smaller/faster model again
+  const modelName = "orca-mini-3b";
+
+  const apiRequestJson = {
+    messages: [
+      {
+        role: "system",
+        content: "Analyze the skill gaps and generate a 7-day roadmap with recommended resources. Make it easy to follow."
+      },
+      {
+        role: "user",
+        content: `User Skills: ${userSkills.join(", ")}\n\nJob Skills: ${jobSkills}`
+      }
+    ],
+    stream: false,
+    model: modelName
+  };
+
+  try {
+    const response = await llamaAPI.run(apiRequestJson);
+    return response.choices[0].message.content.trim();
+  } catch (error) {
+    console.error("Error generating roadmap:", error);
+    return "Unable to generate roadmap. Please try again.";
+  }
+}
+
 app.post("/upload-resume", async (req, res) => {
-  try {
-    if (!req.files || !req.files.resume) {
-      return res.status(400).json({ error: "No file uploaded" });
-    }
+  try {
+    if (!req.files || !req.files.resume) {
+      return res.status(400).json({ error: "No file uploaded" });
+    }
 
-    const buffer = req.files.resume.data;
-    const pdfData = await pdfParse(buffer);
-    const resumeText = pdfData.text;
+    // Parse PDF
+    const pdfData = await pdfParse(req.files.resume.data);
+    const resumeText = pdfData.text;
 
-    const keywords = await extractKeywordsWithLlama(resumeText);
-    console.log(keywords);
-    const jobs = await findJobs(keywords);
-    console.log(jobs);
+    // 1) Extract user skills
+    const userSkills = await extractKeywordsWithLlama(resumeText);
 
-    res.json(jobs);
-  } catch (error) {
-    console.error("Server Error:", error);
-    res.status(500).json({ error: "Internal Server Error" });
-  }
+    // 2) Find relevant jobs
+    const jobs = await findJobs(userSkills);
+
+    // 3) Generate roadmap from user skills + job descriptions
+    const jobDescriptions = jobs.map(job => job.description);
+    const roadmap = await generateRoadmap(userSkills, jobDescriptions);
+
+    // 4) Provide a dummy or computed ATS score
+    const ats_score = 80; // or any random logic
+
+    // 5) Return JSON
+    return res.json({
+      ats_score,
+      jobs,
+      roadmap
+    });
+  } catch (error) {
+    console.error("Server Error:", error);
+    return res.status(500).json({ error: "Internal Server Error" });
+  }
 });
 
 app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));
